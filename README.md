@@ -119,17 +119,29 @@ magi build ./my_project --kernel-src /path/to/linux --build --boot-test
 
 ## 개발 상태
 
-Phase 1 핵심 파이프라인(정적 분석기 → Kconfig 매퍼 → fragment/.config 생성기 → 빌드/부팅 오케스트레이션)이 동작하며, 38개의 자동화 테스트로 검증되어 있습니다(`pytest -q`). C/Python 분석기, 규칙 기반 AI 보조(로컬 함수 섀도잉 탐지), Kconfig 매핑 완전성(모든 capability가 매핑 테이블에 존재하는지), fragment 생성, 그리고 실제 `make`/`bash`/`merge_config.sh` 시퀀스를 호출하는 오케스트레이션 로직까지 커버합니다.
+Phase 1 핵심 파이프라인(정적 분석기 → Kconfig 매퍼 → fragment/.config 생성기 → 빌드/부팅 오케스트레이션)이 동작하며, 43개의 자동화 테스트로 검증되어 있습니다(`pytest -q`).
 
 - [x] 소스 코드 정적 분석기 (C: 렉시컬 스캔, Python: `ast` 기반 — import alias 추적 포함)
 - [x] 탐지 결과 → Kconfig 옵션 매핑 테이블 (모든 capability에 대해 매핑 완전성 테스트로 보증)
-- [x] `.config` 자동 생성 및 `merge_config.sh` 연동 (실제 kernel 소스 트리 대상, 오케스트레이션은 fixture 기반 통합 테스트로 검증)
-- [x] 빌드 파이프라인 자동화 (`magi build --kernel-src ... --build`)
+- [x] `.config` 자동 생성 및 `merge_config.sh` 연동
+- [x] 빌드 파이프라인 자동화 (`magi build --kernel-src ... --build`), `--cross-compile` 지원
 - [x] QEMU 부팅 스모크테스트 (`--boot-test`, best-effort — 커널이 실제로 실행을 시작했는지 부팅 배너로 확인)
 - [x] 규칙 기반 정적 분석의 한계를 보완하는 AI 보조 1단계(로컬 함수 섀도잉 휴리스틱, 외부 의존성 없음) — 항상 활성화
 - [ ] AI 보조 2단계(로컬 LLM) — 플러그인 인터페이스는 구현 완료, 모델 가중치는 번들하지 않음 (`--model-path`로 사용자가 직접 지정)
-- [ ] 실제 x86_64 Linux 커널 소스 트리에 대한 end-to-end 빌드/부팅 검증 — 이 저장소의 자동 테스트는 오케스트레이션 로직을 실제 `make`/`bash`로 검증하지만, Linux 호스트(또는 Docker) 환경에서의 진짜 커널 컴파일까지는 이 개발 환경(macOS, 커널 크로스 빌드 툴체인 없음)에서 실행할 수 없었습니다. 코드 경로 자체는 실제 kernel Makefile 인터페이스에 맞춰 작성되어 있습니다.
 - [ ] 기본 defconfig 대비 이미지 크기 / 빌드 시간 / 활성화된 Kconfig 옵션 수 비교 데모
+
+### 실제 리눅스 커널 소스로 검증한 기록
+
+fixture 기반 통합 테스트에 더해, 실제 [Linux 6.6.79](https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.79.tar.xz) 소스 트리를 내려받아 MAGI가 생성한 fragment를 그 트리의 진짜 `scripts/kconfig/merge_config.sh`에 직접 통과시켜 검증했습니다. 이 과정에서 fixture만으로는 드러나지 않던 실제 버그 두 개를 발견해 고쳤습니다.
+
+1. **fragment 포맷 버그 (수정 완료)**: 초기 버전은 각 옵션 위에 `# CONFIG_NET: reason` 형태의 설명 주석을 넣었는데, 실제 `merge_config.sh`는 옵션 값을 `grep -w $CFG file`로 찾습니다 — 주석 안에 옵션 이름이 그대로 들어 있으면 이 grep이 주석 줄과 실제 줄을 동시에 매치해 병합이 조용히 깨집니다. `render_fragment()`에서 주석을 완전히 제거하고, 이유 설명은 별도 함수 `render_explanation()` / `magi build --explain`으로 분리했습니다. 회귀 테스트로 고정했습니다.
+2. **macOS 호스트 툴체인 비호환성 (감지 후 명확한 에러로 전환)**: `merge_config.sh`는 `sed -i` / `cp -T` 같은 GNU 전용 문법을 씁니다. macOS 시스템 `sed`/`cp`는 BSD 버전이라 `sed -i`가 스크립트를 백업 접미사로 오인해 병합이 아무 경고 없이 실패합니다. `check_host_toolchain()`을 추가해 이 상황을 미리 감지하고 (`brew install gnu-sed coreutils` 안내와 함께) 즉시 실패하도록 만들었습니다.
+
+이 두 수정을 반영한 뒤, 실제 커널 트리에서 다음이 전부 성공했습니다: `allnoconfig` → MAGI fragment 병합 → `olddefconfig`. 결과 `.config`에 MAGI가 의도한 옵션만 정확히 반영됨을 확인했습니다 (예: `network_inet`+`filesystem_io`+`ipc_shared_mmap` 소스에 대해 `CONFIG_NET`/`CONFIG_INET`/`CONFIG_EXT4_FS`/`CONFIG_BLOCK`/`CONFIG_SHMEM`은 `=y`, `CONFIG_SOUND`/`CONFIG_USB_SUPPORT`/`CONFIG_BT`는 미설정 — 총 활성 옵션 약 530개로, 일반 defconfig의 수천 개 대비 대폭 축소).
+
+**여기서 멈춘 지점**: 실제 바이너리(vmlinux/bzImage) 컴파일까지는 이 macOS 개발 환경에서 완주하지 못했습니다. 사용자가 요청한 Docker 경로는 이 샌드박스에서 Docker Desktop의 VM 백엔드가 시작되지 않아(가상화 권한이 막혀 있는 것으로 보이며, `docker info`/`docker desktop restart` 모두 응답 없이 멈춤) 사용할 수 없었습니다. 대안으로 Homebrew의 `musl-cross` 크로스 툴체인으로 네이티브 크로스 빌드를 시도해 Kconfig 병합/해석 단계는 완전히 통과시켰지만, 최종 링크 단계에서 리눅스 커널 빌드 시스템의 호스트 도구(x86_64는 `objtool`이 리눅스 전용 uapi 헤더를 요구, 아키텍처 불문 `scripts/mod/file2alias.c`가 macOS SDK의 `uuid_t`와 이름이 충돌)가 macOS 호스트 자체와 근본적으로 맞지 않는 지점에 도달했습니다. 이는 리눅스 커널이 전통적으로 Linux 호스트(혹은 Docker/VM)에서만 빌드되는 바로 그 이유이며, MAGI의 로직 문제가 아닙니다 — 다운로드한 커널 소스 자체를 패치해서 억지로 통과시키는 것은 "MAGI 검증"의 범위를 벗어난다고 판단해 진행하지 않았습니다.
+
+정리하면: **Kconfig 생성·병합·해석 파이프라인은 실제 커널 트리로 완전히 검증되었고, 그 과정에서 실제 버그를 찾아 고쳤습니다.** 실제 바이너리까지의 컴파일은 Linux 호스트(또는 이 샌드박스가 아닌 환경의 Docker/VM)가 있어야 완주할 수 있습니다 — 코드 경로(`--build`, `--boot-test`, `--cross-compile`)는 그 환경을 염두에 두고 이미 작성·테스트되어 있습니다.
 
 ## 알려진 한계
 

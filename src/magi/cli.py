@@ -16,6 +16,7 @@ from .builder import (
     boot_test,
     build_kernel,
     generate_dot_config,
+    render_explanation,
     write_fragment,
 )
 from .mapper import build_profile
@@ -82,13 +83,17 @@ def _build(args) -> int:
     write_fragment(profile, out_path)
     print(f"wrote Kconfig fragment: {out_path}  ({len(profile.options)} options)")
 
+    if args.explain:
+        print()
+        print(render_explanation(profile))
+
     if not args.kernel_src:
         print("no --kernel-src given: stopping after fragment generation")
         return 0
 
     kernel_src = Path(args.kernel_src)
     try:
-        report = generate_dot_config(kernel_src, out_path, arch=args.arch)
+        report = generate_dot_config(kernel_src, out_path, arch=args.arch, cross_compile=args.cross_compile)
     except BuildError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -96,7 +101,10 @@ def _build(args) -> int:
 
     if args.build:
         try:
-            report = build_kernel(kernel_src, arch=args.arch, jobs=args.jobs, report=report)
+            report = build_kernel(
+                kernel_src, arch=args.arch, jobs=args.jobs, report=report,
+                cross_compile=args.cross_compile,
+            )
         except BuildError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
@@ -133,9 +141,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_build = sub.add_parser("build", parents=[common], help="generate a Kconfig fragment (and optionally build/boot it)")
     p_build.add_argument("--out", default="magi.config", help="output path for the generated Kconfig fragment")
+    p_build.add_argument("--explain", action="store_true", help="print why each option was included")
     p_build.add_argument("--root-fs", default="ext4", choices=["ext4", "xfs", "btrfs", "vfat", "overlay", "squashfs"])
     p_build.add_argument("--kernel-src", default=None, help="path to a Linux kernel source tree; enables .config generation")
     p_build.add_argument("--arch", default="x86_64")
+    p_build.add_argument("--cross-compile", default=None, help="cross-toolchain prefix, e.g. x86_64-linux-musl- (needed when building for an arch that doesn't match the host)")
     p_build.add_argument("--build", action="store_true", help="actually compile the kernel (requires --kernel-src)")
     p_build.add_argument("--boot-test", action="store_true", help="boot-smoke-test the built image under QEMU (requires --build)")
     p_build.add_argument("--jobs", type=int, default=None, help="parallel build jobs (default: make's default)")

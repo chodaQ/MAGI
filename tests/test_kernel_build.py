@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from magi.builder import BuildError, build_kernel, generate_dot_config, verify_kernel_tree, write_fragment
+from magi.builder.kernel_build import check_host_toolchain
 from magi.mapper import build_profile
 
 FAKE_KERNEL = Path(__file__).parent / "fixtures" / "fake_kernel"
@@ -25,6 +26,14 @@ def test_verify_kernel_tree_rejects_missing_makefile(tmp_path):
         verify_kernel_tree(tmp_path)
 
 
+def test_check_host_toolchain_passes_with_gnu_tools_on_path():
+    # By the time tests run, conftest.py has already put GNU sed/cp
+    # ahead on PATH if this is macOS and Homebrew has them installed;
+    # on Linux the system tools already are GNU. Either way this must
+    # not raise.
+    check_host_toolchain()
+
+
 def test_generate_dot_config_produces_expected_options(kernel_src, tmp_path):
     profile = build_profile(["network_inet", "ipc_sysv"])
     fragment = write_fragment(profile, tmp_path / "magi.config")
@@ -44,6 +53,18 @@ def test_generate_dot_config_produces_expected_options(kernel_src, tmp_path):
 def test_generate_dot_config_missing_fragment_raises(kernel_src):
     with pytest.raises(BuildError):
         generate_dot_config(kernel_src, kernel_src / "does_not_exist.config")
+
+
+def test_cross_compile_prefix_is_passed_to_make(kernel_src, tmp_path):
+    profile = build_profile(["network_inet"])
+    fragment = write_fragment(profile, tmp_path / "magi.config")
+
+    report = generate_dot_config(kernel_src, fragment, arch="x86_64", cross_compile="x86_64-linux-musl-")
+
+    make_commands = [c for c in report.commands if c.args[0].endswith("make")]
+    assert make_commands, "expected at least one make invocation"
+    for cmd in make_commands:
+        assert "CROSS_COMPILE=x86_64-linux-musl-" in cmd.args
 
 
 def test_build_kernel_produces_image(kernel_src, tmp_path):

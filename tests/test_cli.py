@@ -45,6 +45,18 @@ def test_build_no_ai_flag_still_works(tmp_path):
     assert out_file.is_file()
 
 
+def test_build_explain_flag_prints_rationale(tmp_path, capsys):
+    out_file = tmp_path / "out.config"
+    rc = main([
+        "build", str(FIXTURES / "c_project"), "--explain",
+        "--out", str(out_file),
+    ])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "why each option was included" in out
+    assert "network_inet" in out
+
+
 def test_analyze_nonexistent_path_handled():
     rc = main(["analyze", "/nonexistent/path/xyz"])
     assert rc == 0  # analyze_path on a nonexistent path scans nothing, not an error

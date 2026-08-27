@@ -12,6 +12,7 @@ detection, not reinventing Kconfig.
 
 from __future__ import annotations
 
+import platform
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -21,6 +22,48 @@ from typing import List, Optional
 
 class BuildError(RuntimeError):
     pass
+
+
+def check_host_toolchain() -> None:
+    """Fail fast, with an actionable message, instead of letting a BSD
+    ``sed``/``cp`` silently corrupt a real merge_config.sh run.
+
+    scripts/kconfig/merge_config.sh (part of every kernel tree) uses
+    GNU-only invocations -- ``sed -i SCRIPT file`` (BSD sed requires an
+    explicit, possibly-empty backup-suffix argument, so it instead
+    treats the sed script as that suffix and the target file as the
+    script) and ``cp -T`` (not a BSD cp flag at all). On macOS, whose
+    system ``/usr/bin/sed`` and ``/usr/bin/cp`` are BSD tools, this
+    fails: the first form silently drops the merge (visible only as a
+    "sed: invalid command code" line buried in the log and a
+    same-as-before .config), and the second form errors outright. This
+    was found by actually running merge_config.sh from a real kernel
+    tree during development, not by inspecting the script.
+    """
+    if platform.system() != "Darwin":
+        return
+    problems = []
+    for tool in ("sed", "cp"):
+        path = shutil.which(tool)
+        if not path:
+            continue
+        try:
+            out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=5)
+            is_gnu = "GNU" in out.stdout
+        except (OSError, subprocess.TimeoutExpired):
+            is_gnu = False
+        if not is_gnu:
+            problems.append((tool, path))
+    if problems:
+        tools = ", ".join(f"{t} ({p})" for t, p in problems)
+        raise BuildError(
+            f"macOS's BSD {tools} on PATH are incompatible with the kernel's "
+            "scripts/kconfig/merge_config.sh (it needs GNU sed/coreutils). "
+            "Install them and put them ahead of the system tools on PATH, e.g.:\n"
+            "  brew install gnu-sed coreutils\n"
+            '  export PATH="/opt/homebrew/opt/coreutils/libexec/gnubin:'
+            '/opt/homebrew/opt/gnu-sed/libexec/gnubin:$PATH"'
+        )
 
 
 @dataclass
@@ -81,10 +124,15 @@ def _run(args: List[str], cwd: Path, env=None) -> CommandResult:
     return result
 
 
+def _cross_compile_args(cross_compile: Optional[str]) -> List[str]:
+    return [f"CROSS_COMPILE={cross_compile}"] if cross_compile else []
+
+
 def generate_dot_config(
     kernel_src: Path,
     fragment_path: Path,
     arch: str = "x86_64",
+    cross_compile: Optional[str] = None,
 ) -> BuildReport:
     """Produce a fully resolved ``.config`` inside ``kernel_src``.
 
@@ -92,10 +140,16 @@ def generate_dot_config(
     merge the MAGI-generated fragment on top, then run
     ``olddefconfig`` so the kernel's own Kconfig resolves any options
     that the fragment's choices imply (dependencies, reverse selects).
+
+    ``cross_compile`` is the standard kernel build cross-toolchain
+    prefix (e.g. ``x86_64-linux-musl-``) needed whenever the host
+    architecture doesn't match ``arch`` -- for instance building an
+    x86_64 kernel from an Apple Silicon Mac.
     """
     kernel_src = Path(kernel_src)
     fragment_path = Path(fragment_path)
     verify_kernel_tree(kernel_src)
+    check_host_toolchain()
     if not fragment_path.is_file():
         raise BuildError(f"fragment file not found: {fragment_path}")
 
@@ -104,14 +158,15 @@ def generate_dot_config(
     if make is None:
         raise BuildError("`make` not found on PATH")
 
-    commands.append(_run([make, f"ARCH={arch}", "allnoconfig"], cwd=kernel_src))
+    cc_args = _cross_compile_args(cross_compile)
+    commands.append(_run([make, f"ARCH={arch}", *cc_args, "allnoconfig"], cwd=kernel_src))
     commands.append(
         _run(
             ["bash", "scripts/kconfig/merge_config.sh", "-m", ".config", str(fragment_path)],
             cwd=kernel_src,
         )
     )
-    commands.append(_run([make, f"ARCH={arch}", "olddefconfig"], cwd=kernel_src))
+    commands.append(_run([make, f"ARCH={arch}", *cc_args, "olddefconfig"], cwd=kernel_src))
 
     dot_config = kernel_src / ".config"
     if not dot_config.is_file():
@@ -125,6 +180,7 @@ def build_kernel(
     arch: str = "x86_64",
     jobs: Optional[int] = None,
     report: Optional[BuildReport] = None,
+    cross_compile: Optional[str] = None,
 ) -> BuildReport:
     """Actually compile the kernel image. Requires a working cross/native
     toolchain for ``arch`` on the host; this is the slow, real build
@@ -136,7 +192,7 @@ def build_kernel(
     if make is None:
         raise BuildError("`make` not found on PATH")
 
-    args = [make, f"ARCH={arch}"]
+    args = [make, f"ARCH={arch}", *_cross_compile_args(cross_compile)]
     if jobs:
         args.append(f"-j{jobs}")
     result = _run(args, cwd=kernel_src)
