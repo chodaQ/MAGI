@@ -11,8 +11,6 @@ Quick Start
 * 최소 Kconfig 조각(fragment) 생성: `magi build ./my_project --out magi.config`
 * 실제 커널 소스에 대해 `.config` + 빌드 + QEMU 부팅까지: [사용법](#사용법) 참고
 * 버그 리포트: 이 저장소의 Issues (또는 소스에 코멘트로 남겨주세요)
-* 실제 Linux 6.6.79로 끝까지 검증한 기록: [실제 리눅스 커널 소스로 검증한 기록](#실제-리눅스-커널-소스로-검증한-기록)
-
 Essential Documentation
 ------------------------
 
@@ -23,10 +21,8 @@ Essential Documentation
 * 설치 및 빌드 요구사항: [설치](#설치)
 * 라이선스: [LICENSE](LICENSE) (GPL-2.0-or-later)
 
-문서는 아직 이 README 한 파일에 전부 담겨 있습니다 — 프로젝트가 커지면 `Documentation/`으로 분리할 계획입니다.
 
-
-Who Are You?
+참고해야할 문서
 ============
 
 아래에서 자신의 역할을 찾아보세요:
@@ -79,16 +75,6 @@ CI 파이프라인 관리자
 
 * `magi build ... --kernel-src ... --build --boot-test`는 exit code로 성공/실패를 보고합니다 (부팅 실패 시 non-zero).
 * 부팅 테스트는 QEMU가 PATH에 있을 때만 동작하며, 없으면 `ran=False`로 정상적으로 스킵됩니다 — CI에서 QEMU 설치 여부에 따라 자연스럽게 옵트인됩니다.
-
-AI 코딩 어시스턴트
---------------------
-
-**중요**: 이 저장소를 자동으로 수정하는 LLM/AI 코딩 도구는 아래 원칙을 지켜주세요.
-
-* 이 프로젝트는 **결정론적 규칙 기반 분석이 기본값**이며, 어떤 최적화 제안도 이 기본 경로가 외부 네트워크·API 키·모델 파일 없이 동작한다는 불변조건을 깨서는 안 됩니다 ([AI 보조 분석](#ai-보조-분석-선택-기능) 참고).
-* `src/magi/mapper/kconfig_map.py`의 옵션-근거 매핑을 수정할 때는 실제 Linux Kconfig에 그 옵션이 존재하고 주장한 효과가 맞는지 확인 후 코드 근처에 근거를 남겨주세요 — 이 파일은 "그럴듯해 보이는" 이름이 아니라 검증된 사실이어야 합니다.
-* 새 기능을 추가하면 대응하는 테스트를 `tests/`에 추가하고 `pytest -q`가 통과하는지 확인해주세요. 이 프로젝트는 fixture 테스트만으로는 못 잡는 버그가 실제 커널 빌드에서 여러 번 나온 이력이 있습니다 ([실제 리눅스 커널 소스로 검증한 기록](#실제-리눅스-커널-소스로-검증한-기록) 참고) — "테스트가 통과한다"와 "실제로 동작한다"는 다를 수 있음을 유념해주세요.
-* 커밋 메시지에 AI 도구가 생성했음을 명시해주세요.
 
 
 Communication and Support
@@ -285,4 +271,4 @@ GPL-2.0-or-later ([LICENSE](LICENSE) 참고). 리눅스 커널 자체도 GPL-2.0
 만든 사람
 ----------
 
-주인놈 — [ChodOS](https://github.com/chodaQ/chodOS) 개발 및 리눅스 커널 staging tree 기여 경험을 바탕으로 시작한 프로젝트입니다.
+chodaQ— [ChodOS](https://github.com/chodaQ/chodOS) 개발 및 리눅스 커널 staging tree 기여 경험을 바탕으로 시작한 프로젝트입니다.
