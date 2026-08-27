@@ -210,6 +210,20 @@ def build_kernel(
     return report
 
 
+# Per-arch QEMU invocation. Verified for real by actually booting a
+# MAGI-built arm64 kernel under qemu-system-aarch64 during development
+# (see README, "실제 리눅스 커널 소스로 검증한 기록"): -M virt and
+# console=ttyAMA0 are both required for arm/arm64 -- qemu-system-aarch64
+# has no usable default machine type, and the QEMU virt board's UART is
+# ttyAMA0 (PL011), not ttyS0. The x86_64/i386 entries need neither.
+_BOOT_TEST_ARCH_CONFIG = {
+    "x86_64": {"qemu_bin": "qemu-system-x86_64", "console": "ttyS0", "extra_args": []},
+    "i386": {"qemu_bin": "qemu-system-i386", "console": "ttyS0", "extra_args": []},
+    "arm64": {"qemu_bin": "qemu-system-aarch64", "console": "ttyAMA0", "extra_args": ["-M", "virt", "-cpu", "cortex-a72"]},
+    "arm": {"qemu_bin": "qemu-system-arm", "console": "ttyAMA0", "extra_args": ["-M", "virt", "-cpu", "cortex-a15"]},
+}
+
+
 def boot_test(image_path: Path, arch: str = "x86_64", timeout: float = 30.0) -> BootTestResult:
     """Best-effort smoke test: boot the built image under QEMU with no
     root filesystem attached, and check that the kernel actually
@@ -219,29 +233,37 @@ def boot_test(image_path: Path, arch: str = "x86_64", timeout: float = 30.0) -> 
     generated .config produces a kernel that *runs*, without requiring
     MAGI to also synthesize a bootable root filesystem.
     """
-    qemu_bin = {"x86_64": "qemu-system-x86_64", "i386": "qemu-system-i386"}.get(arch)
-    if qemu_bin is None:
+    arch_config = _BOOT_TEST_ARCH_CONFIG.get(arch)
+    if arch_config is None:
         return BootTestResult(ran=False, passed=False, reason=f"no QEMU boot test defined for arch={arch}")
 
-    qemu = shutil.which(qemu_bin)
+    qemu = shutil.which(arch_config["qemu_bin"])
     if qemu is None:
-        return BootTestResult(ran=False, passed=False, reason=f"{qemu_bin} not found on PATH")
+        return BootTestResult(ran=False, passed=False, reason=f"{arch_config['qemu_bin']} not found on PATH")
 
     image_path = Path(image_path)
     if not image_path.is_file():
         return BootTestResult(ran=False, passed=False, reason=f"image not found: {image_path}")
 
     args = [
-        qemu, "-kernel", str(image_path),
-        "-nographic", "-no-reboot", "-m", "256",
-        "-append", "console=ttyS0 panic=-1",
+        qemu, *arch_config["extra_args"],
+        "-kernel", str(image_path),
+        "-display", "none", "-serial", "stdio", "-monitor", "none",
+        "-no-reboot", "-m", "256",
+        "-append", f"console={arch_config['console']} panic=-1",
     ]
     try:
         proc = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                text=True, timeout=timeout)
         log = proc.stdout
     except subprocess.TimeoutExpired as exc:
-        log = (exc.stdout or "")
+        # exc.stdout is documented as decoded text when text=True is
+        # passed to run(), but on the timeout path some Python versions
+        # hand back the raw bytes captured before decoding was applied
+        # -- decode defensively rather than crash on `in` over bytes.
+        log = exc.stdout or ""
+        if isinstance(log, bytes):
+            log = log.decode("utf-8", errors="replace")
 
     if "Linux version" in log:
         return BootTestResult(ran=True, passed=True, reason="kernel banner observed under QEMU", log=log)

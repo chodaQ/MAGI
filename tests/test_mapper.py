@@ -14,6 +14,20 @@ def test_base_options_always_present():
     assert set(BASE_OPTIONS) <= set(profile.options)
 
 
+def test_base_options_include_a_console_driver():
+    """Regression test: a real QEMU boot test against an earlier
+    MAGI-generated .config showed the kernel executing (real
+    interrupt/PSCI traces) but printing nothing at all -- the base
+    profile enabled the TTY/VT layer but no actual UART driver, so
+    `console=ttyAMA0`/`console=ttyS0` had nothing to bind to. Without
+    this, "boots to a usable console" was not actually true."""
+    console_drivers = {
+        "CONFIG_SERIAL_8250", "CONFIG_SERIAL_8250_CONSOLE",
+        "CONFIG_SERIAL_AMBA_PL011", "CONFIG_SERIAL_AMBA_PL011_CONSOLE",
+    }
+    assert console_drivers <= set(BASE_OPTIONS)
+
+
 def test_network_capability_maps_to_expected_options():
     profile = build_profile(["network_inet"])
     assert "CONFIG_NET" in profile.options

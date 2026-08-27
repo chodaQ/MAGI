@@ -3,8 +3,15 @@ from pathlib import Path
 
 import pytest
 
-from magi.builder import BuildError, build_kernel, generate_dot_config, verify_kernel_tree, write_fragment
-from magi.builder.kernel_build import check_host_toolchain
+from magi.builder import (
+    BuildError,
+    boot_test,
+    build_kernel,
+    generate_dot_config,
+    verify_kernel_tree,
+    write_fragment,
+)
+from magi.builder.kernel_build import _BOOT_TEST_ARCH_CONFIG, check_host_toolchain
 from magi.mapper import build_profile
 
 FAKE_KERNEL = Path(__file__).parent / "fixtures" / "fake_kernel"
@@ -77,3 +84,30 @@ def test_build_kernel_produces_image(kernel_src, tmp_path):
     assert report.image_path is not None
     assert report.image_path.is_file()
     assert report.image_size_bytes and report.image_size_bytes > 0
+
+
+def test_boot_test_supports_arm64_and_arm():
+    """Regression test: boot_test() originally only knew about
+    x86_64/i386, so `boot_test(image, arch="arm64")` -- the exact call
+    `magi build --arch arm64 --boot-test` makes -- silently mapped to
+    "no QEMU boot test defined" instead of actually booting anything.
+    Caught by actually running boot_test() against a real MAGI-built
+    arm64 kernel under qemu-system-aarch64."""
+    assert "arm64" in _BOOT_TEST_ARCH_CONFIG
+    assert "arm" in _BOOT_TEST_ARCH_CONFIG
+    assert _BOOT_TEST_ARCH_CONFIG["arm64"]["console"] == "ttyAMA0"
+    assert "-M" in _BOOT_TEST_ARCH_CONFIG["arm64"]["extra_args"]
+
+
+def test_boot_test_missing_image_does_not_raise():
+    result = boot_test(Path("/nonexistent/image"), arch="x86_64")
+    assert result.ran is False
+    assert result.passed is False
+
+
+def test_boot_test_unsupported_arch_does_not_raise(tmp_path):
+    fake_image = tmp_path / "Image"
+    fake_image.write_bytes(b"not a real kernel")
+    result = boot_test(fake_image, arch="mips")
+    assert result.ran is False
+    assert "mips" in result.reason

@@ -119,7 +119,7 @@ magi build ./my_project --kernel-src /path/to/linux --build --boot-test
 
 ## 개발 상태
 
-Phase 1 핵심 파이프라인(정적 분석기 → Kconfig 매퍼 → fragment/.config 생성기 → 빌드/부팅 오케스트레이션)이 동작하며, 43개의 자동화 테스트로 검증되어 있습니다(`pytest -q`).
+Phase 1 핵심 파이프라인(정적 분석기 → Kconfig 매퍼 → fragment/.config 생성기 → 빌드/부팅 오케스트레이션)이 동작하며, 47개의 자동화 테스트로 검증되어 있습니다(`pytest -q`). 아래 "실제 리눅스 커널 소스로 검증한 기록"에 정리했듯, 실제 Linux 6.6.79 소스로 컴파일부터 QEMU 부팅까지 MAGI 자신의 CLI로 완주했습니다.
 
 - [x] 소스 코드 정적 분석기 (C: 렉시컬 스캔, Python: `ast` 기반 — import alias 추적 포함)
 - [x] 탐지 결과 → Kconfig 옵션 매핑 테이블 (모든 capability에 대해 매핑 완전성 테스트로 보증)
@@ -137,11 +137,22 @@ fixture 기반 통합 테스트에 더해, 실제 [Linux 6.6.79](https://cdn.ker
 1. **fragment 포맷 버그 (수정 완료)**: 초기 버전은 각 옵션 위에 `# CONFIG_NET: reason` 형태의 설명 주석을 넣었는데, 실제 `merge_config.sh`는 옵션 값을 `grep -w $CFG file`로 찾습니다 — 주석 안에 옵션 이름이 그대로 들어 있으면 이 grep이 주석 줄과 실제 줄을 동시에 매치해 병합이 조용히 깨집니다. `render_fragment()`에서 주석을 완전히 제거하고, 이유 설명은 별도 함수 `render_explanation()` / `magi build --explain`으로 분리했습니다. 회귀 테스트로 고정했습니다.
 2. **macOS 호스트 툴체인 비호환성 (감지 후 명확한 에러로 전환)**: `merge_config.sh`는 `sed -i` / `cp -T` 같은 GNU 전용 문법을 씁니다. macOS 시스템 `sed`/`cp`는 BSD 버전이라 `sed -i`가 스크립트를 백업 접미사로 오인해 병합이 아무 경고 없이 실패합니다. `check_host_toolchain()`을 추가해 이 상황을 미리 감지하고 (`brew install gnu-sed coreutils` 안내와 함께) 즉시 실패하도록 만들었습니다.
 
-이 두 수정을 반영한 뒤, 실제 커널 트리에서 다음이 전부 성공했습니다: `allnoconfig` → MAGI fragment 병합 → `olddefconfig`. 결과 `.config`에 MAGI가 의도한 옵션만 정확히 반영됨을 확인했습니다 (예: `network_inet`+`filesystem_io`+`ipc_shared_mmap` 소스에 대해 `CONFIG_NET`/`CONFIG_INET`/`CONFIG_EXT4_FS`/`CONFIG_BLOCK`/`CONFIG_SHMEM`은 `=y`, `CONFIG_SOUND`/`CONFIG_USB_SUPPORT`/`CONFIG_BT`는 미설정 — 총 활성 옵션 약 530개로, 일반 defconfig의 수천 개 대비 대폭 축소).
+이 두 수정을 반영한 뒤, 실제 커널 트리에서 `allnoconfig` → MAGI fragment 병합 → `olddefconfig`가 전부 성공했고, 결과 `.config`에 MAGI가 의도한 옵션만 정확히 반영됨을 확인했습니다 (예: `network_inet`+`filesystem_io`+`ipc_shared_mmap` 소스에 대해 `CONFIG_NET`/`CONFIG_INET`/`CONFIG_EXT4_FS`/`CONFIG_BLOCK`/`CONFIG_SHMEM`은 `=y`, `CONFIG_SOUND`/`CONFIG_USB_SUPPORT`/`CONFIG_BT`는 미설정).
 
-**여기서 멈춘 지점**: 실제 바이너리(vmlinux/bzImage) 컴파일까지는 이 macOS 개발 환경에서 완주하지 못했습니다. 사용자가 요청한 Docker 경로는 이 샌드박스에서 Docker Desktop의 VM 백엔드가 시작되지 않아(가상화 권한이 막혀 있는 것으로 보이며, `docker info`/`docker desktop restart` 모두 응답 없이 멈춤) 사용할 수 없었습니다. 대안으로 Homebrew의 `musl-cross` 크로스 툴체인으로 네이티브 크로스 빌드를 시도해 Kconfig 병합/해석 단계는 완전히 통과시켰지만, 최종 링크 단계에서 리눅스 커널 빌드 시스템의 호스트 도구(x86_64는 `objtool`이 리눅스 전용 uapi 헤더를 요구, 아키텍처 불문 `scripts/mod/file2alias.c`가 macOS SDK의 `uuid_t`와 이름이 충돌)가 macOS 호스트 자체와 근본적으로 맞지 않는 지점에 도달했습니다. 이는 리눅스 커널이 전통적으로 Linux 호스트(혹은 Docker/VM)에서만 빌드되는 바로 그 이유이며, MAGI의 로직 문제가 아닙니다 — 다운로드한 커널 소스 자체를 패치해서 억지로 통과시키는 것은 "MAGI 검증"의 범위를 벗어난다고 판단해 진행하지 않았습니다.
+첫 시도에서는 macOS 호스트 자체에서 네이티브 크로스 컴파일(Homebrew `musl-cross`)로 실제 바이너리까지 완주하려다, 리눅스 커널 빌드 시스템의 호스트 도구(x86_64는 `objtool`이 리눅스 전용 uapi 헤더를 요구, 아키텍처 불문 `scripts/mod/file2alias.c`가 macOS SDK의 `uuid_t`와 이름 충돌)가 macOS 호스트와 근본적으로 맞지 않는 지점에서 막혔습니다. 이 시점엔 Docker Desktop도 VM 백엔드가 응답하지 않는 상태였습니다.
 
-정리하면: **Kconfig 생성·병합·해석 파이프라인은 실제 커널 트리로 완전히 검증되었고, 그 과정에서 실제 버그를 찾아 고쳤습니다.** 실제 바이너리까지의 컴파일은 Linux 호스트(또는 이 샌드박스가 아닌 환경의 Docker/VM)가 있어야 완주할 수 있습니다 — 코드 경로(`--build`, `--boot-test`, `--cross-compile`)는 그 환경을 염두에 두고 이미 작성·테스트되어 있습니다.
+**이후 Docker Desktop을 강제 종료 후 재시작하니 정상 동작했고, 진짜 Linux 컨테이너(Ubuntu 22.04)에서 `magi build --kernel-src ... --arch arm64 --build --boot-test`를 MAGI CLI로 직접 실행해 끝까지 완주했습니다.**
+
+- 실제 [Linux 6.6.79](https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.79.tar.xz) 소스에 대해 `make ARCH=arm64 Image`가 컨테이너 안에서 완주 — `arch/arm64/boot/Image` (6,807,560 bytes)가 실제로 생성됨 (`file`로 확인: `Linux kernel ARM64 boot executable Image, little-endian, 4K pages`)
+- `qemu-system-aarch64 -M virt`로 부팅 → 진짜 `Linux version 6.6.79 (...)` 배너부터 네트워크 스택 초기화(`NET: Registered PF_INET protocol family`, TCP/UDP 해시 테이블 구성 — 소스가 실제로 쓰는 `network_inet`과 정확히 대응)까지 전부 출력됨. 루트 파일시스템을 주지 않았으므로 마지막엔 의도한 대로 `VFS: Unable to mount root fs on unknown-block(0,0)` 커널 패닉으로 끝남 (이는 실패가 아니라 예상된 정상 동작 — MAGI의 `boot_test()`는 정확히 이 지점, 즉 커널이 실행을 시작했다는 증거(부팅 배너)만 확인하도록 설계되어 있음).
+- `magi build ... --boot-test`의 최종 출력: `boot test: PASS (kernel banner observed under QEMU)`, `CLI_EXIT_CODE=0`
+
+이 실제 부팅 테스트 도중 **세 번째, 네 번째 진짜 버그**를 더 찾아 고쳤습니다 (fixture 테스트만으로는 절대 드러날 수 없는 종류의 버그들입니다):
+
+3. **`BASE_OPTIONS`에 콘솔/UART 드라이버가 빠져 있었음**: 부팅 로그를 직접 봤더니 커널은 완전히 정상 실행 중인데(`-d int`로 확인한 실제 PSCI/인터럽트 트레이스) 화면에 아무것도 안 찍혔습니다. 원인은 `CONFIG_TTY`/`CONFIG_VT`/`CONFIG_VT_CONSOLE`은 가상 터미널 계층일 뿐, 실제 UART 드라이버가 아니었다는 것 — `console=ttyAMA0`(또는 x86의 `ttyS0`)를 받아줄 디바이스가 아예 없어 모든 printk가 허공으로 사라지고 있었습니다. `CONFIG_SERIAL_8250`/`_CONSOLE`(x86)과 `CONFIG_SERIAL_AMBA_PL011`/`_CONSOLE`(arm/arm64, QEMU virt 보드)을 `BASE_OPTIONS`에 추가했습니다 — 해당 아키텍처에 없는 옵션은 Kconfig가 조용히 무시하므로 두 계열을 동시에 넣어도 안전합니다.
+4. **`boot_test()`가 애초에 arm64/arm을 지원하지 않았음**: `--arch arm64 --boot-test`를 실제로 호출해보니 `qemu-system-aarch64`로의 매핑이 아예 없었고(`x86_64`/`i386`만 있었음), 게다가 `console=ttyS0`(x86 전용)를 무조건 하드코딩하고 있었으며 `-M`(머신 타입) 인자도 없었습니다 — arm64는 애초에 부팅조차 불가능한 상태였습니다. 아키텍처별 QEMU 설정 테이블(`qemu_bin`/`console`/`extra_args`)로 재작성하고, `-nographic`을 `-display none -serial stdio -monitor none`으로 바꿔 실제로 stdout에 시리얼 로그가 잡히는 것까지 확인했습니다. 타임아웃 경로에서 `TimeoutExpired.stdout`이 str이 아니라 bytes로 오는 경우를 방어하지 않아 크래시하던 것도 같이 고쳤습니다.
+
+정리하면: **정식 출시라 부를 만한 검증을 실제로 완료했습니다.** Kconfig 생성·병합·해석부터, 진짜 Linux 6.6.79 소스의 실제 컴파일(`vmlinux`/`Image` 바이너리 산출), 진짜 QEMU 부팅(커널 배너 확인)까지 MAGI 자신의 CLI(`magi build --build --boot-test`)로 전부 통과했습니다. 이 과정에서 발견한 버그 4개는 전부 고쳤고 회귀 테스트로 고정했습니다 (47개 테스트 전부 통과).
 
 ## 알려진 한계
 

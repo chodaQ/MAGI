@@ -28,6 +28,22 @@ class Mapping:
 # Sourced from the set of options tinyconfig/allnoconfig-derived
 # minimal configs are documented to need in order to actually boot to
 # a userspace init, rather than just link.
+#
+# CONFIG_SERIAL_8250(_CONSOLE) / CONFIG_SERIAL_AMBA_PL011(_CONSOLE) were
+# added after a real QEMU boot test against a MAGI-generated .config
+# (Linux 6.6.79, arm64) showed the kernel executing correctly -- real
+# interrupt/PSCI traces confirmed via `-d int` -- but printing nothing
+# at all: CONFIG_TTY/CONFIG_VT/CONFIG_VT_CONSOLE cover the virtual
+# terminal layer but not any actual UART driver, so `console=ttyAMA0`
+# (or `console=ttyS0` on x86) had no backing device and every printk
+# went nowhere. Without a console driver, "boots to a shell" is not
+# actually true even though the kernel runs -- there is nothing to
+# see or interact with. Both driver Kconfig symbols are harmless to
+# include unconditionally: Kconfig silently ignores an option that
+# doesn't exist for the selected architecture (e.g. AMBA_PL011 has no
+# effect in an x86_64 build), so listing both covers x86/i386 (8250)
+# and arm/arm64 QEMU-virt-style targets (PL011) without needing
+# per-arch branching here.
 BASE_OPTIONS: Tuple[str, ...] = (
     "CONFIG_64BIT",
     "CONFIG_BINFMT_ELF",
@@ -39,6 +55,10 @@ BASE_OPTIONS: Tuple[str, ...] = (
     "CONFIG_VT",
     "CONFIG_VT_CONSOLE",
     "CONFIG_UNIX98_PTYS",
+    "CONFIG_SERIAL_8250",
+    "CONFIG_SERIAL_8250_CONSOLE",
+    "CONFIG_SERIAL_AMBA_PL011",
+    "CONFIG_SERIAL_AMBA_PL011_CONSOLE",
     "CONFIG_PROC_FS",
     "CONFIG_SYSFS",
     "CONFIG_TMPFS",
