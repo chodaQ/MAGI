@@ -1,7 +1,108 @@
-# MAGI
-> 소스 코드를 넣으면, 그 목적에 딱 필요한 만큼만 남긴 최소 구성 리눅스 커널을 자동으로 빌드해주는 도구입니다.
+MAGI
+====
 
-## 왜 만들었는가
+소스 코드를 넣으면, 그 목적에 딱 필요한 만큼만 남긴 최소 구성 리눅스 커널을 자동으로 빌드해주는 도구입니다.
+정적 분석으로 프로그램이 실제로 쓰는 시스템 기능을 판별하고, 그에 맞는 최소 Kconfig 구성과 (선택적으로) 실제 커널 이미지까지 생성합니다.
+
+Quick Start
+-----------
+
+* 코드가 실제로 쓰는 커널 기능 확인: `magi analyze ./my_project`
+* 최소 Kconfig 조각(fragment) 생성: `magi build ./my_project --out magi.config`
+* 실제 커널 소스에 대해 `.config` + 빌드 + QEMU 부팅까지: [사용법](#사용법) 참고
+* 버그 리포트: 이 저장소의 Issues (또는 소스에 코멘트로 남겨주세요)
+* 실제 Linux 6.6.79로 끝까지 검증한 기록: [실제 리눅스 커널 소스로 검증한 기록](#실제-리눅스-커널-소스로-검증한-기록)
+
+Essential Documentation
+------------------------
+
+모두가 한 번은 읽어야 할 문서:
+
+* 왜 만들었는가: [왜 만들었는가](#왜-만들었는가)
+* 기존 도구(`localmodconfig`, `tinyconfig`)와 뭐가 다른가: [기존 접근과의 차이](#기존-접근과의-차이)
+* 설치 및 빌드 요구사항: [설치](#설치)
+* 라이선스: [LICENSE](LICENSE) (GPL-2.0-or-later)
+
+문서는 아직 이 README 한 파일에 전부 담겨 있습니다 — 프로젝트가 커지면 `Documentation/`으로 분리할 계획입니다.
+
+
+Who Are You?
+============
+
+아래에서 자신의 역할을 찾아보세요:
+
+* **신규 기여자**: MAGI 코드베이스에 처음 기여하려는 분
+* **보안 연구자**: 공격 표면 최소화·정적 분석 정확도에 관심 있는 분
+* **DevOps / SRE / 플랫폼 엔지니어**: 컨테이너·단일 목적 서버에 최소 커널을 실제로 적용하려는 분
+* **임베디드/커널 엔지니어**: Kconfig 매핑 정확성을 검증하거나 새 아키텍처를 추가하려는 분
+* **CI 파이프라인 관리자**: 빌드/배포 파이프라인에 `magi build`를 통합하려는 분
+* **AI 코딩 어시스턴트**: 이 저장소를 자동으로 수정/기여하려는 LLM 기반 도구
+
+
+For Specific Users
+===================
+
+신규 기여자
+-----------
+
+* 아키텍처 개요: [핵심 아이디어](#핵심-아이디어)
+* 코드 위치: 분석기 `src/magi/analyzer/`, 매퍼 `src/magi/mapper/`, 빌더 `src/magi/builder/`, AI 보조 `src/magi/ai_assist/`
+* 테스트 실행: `pip install -e ".[dev]" && pytest -q` (47개, 전부 통과해야 함)
+* 커밋 전 체크리스트: 새 capability를 추가했다면 `CAPABILITY_MAP`에 대응 항목이 있는지 `tests/test_mapper.py::test_every_capability_has_a_mapping_entry`가 검증합니다.
+
+보안 연구자
+-----------
+
+* 위협 모델과 설계 근거: [왜 만들었는가](#왜-만들었는가), [기존 접근과의 차이](#기존-접근과의-차이)
+* 정적 분석의 알려진 맹점(동적 디스패치, `dlopen`, 매크로 생성 호출 등): [알려진 한계](#알려진-한계)
+* 오탐 필터링 로직(로컬 함수 섀도잉 휴리스틱): [AI 보조 분석](#ai-보조-분석-선택-기능), 코드: `src/magi/ai_assist/heuristic.py`
+* Kconfig 매핑 근거(어떤 capability가 왜 어떤 옵션을 켜는지): `src/magi/mapper/kconfig_map.py`의 각 항목 주석, 또는 `magi build --explain`
+
+DevOps / SRE / 플랫폼 엔지니어
+-------------------------------
+
+* 빠른 적용: `magi build ./my_service --kernel-src /path/to/linux --arch x86_64 --build`
+* 루트 파일시스템 타입 지정: `--root-fs {ext4,xfs,btrfs,vfat,overlay,squashfs}`
+* 크로스 컴파일: `--cross-compile <prefix->` (예: `x86_64-linux-musl-`)
+* CI 연동을 위한 JSON 출력: `magi analyze ./my_service --json`
+* 실서비스 적용 전 반드시 읽을 것: [알려진 한계](#알려진-한계) — 정적 분석은 완전성을 보장하지 않습니다.
+
+임베디드/커널 엔지니어
+------------------------
+
+* 새 아키텍처 추가: `src/magi/builder/kernel_build.py`의 `_IMAGE_CANDIDATES`, `_BOOT_TEST_ARCH_CONFIG`에 항목 추가
+* Kconfig 매핑 감사: `src/magi/mapper/kconfig_map.py`
+* 실제 커널 트리로 검증하는 법: [실제 리눅스 커널 소스로 검증한 기록](#실제-리눅스-커널-소스로-검증한-기록)에 정확히 어떤 명령으로 어떻게 검증했는지 재현 가능하게 적어뒀습니다.
+
+CI 파이프라인 관리자
+----------------------
+
+* `magi build ... --kernel-src ... --build --boot-test`는 exit code로 성공/실패를 보고합니다 (부팅 실패 시 non-zero).
+* 부팅 테스트는 QEMU가 PATH에 있을 때만 동작하며, 없으면 `ran=False`로 정상적으로 스킵됩니다 — CI에서 QEMU 설치 여부에 따라 자연스럽게 옵트인됩니다.
+
+AI 코딩 어시스턴트
+--------------------
+
+**중요**: 이 저장소를 자동으로 수정하는 LLM/AI 코딩 도구는 아래 원칙을 지켜주세요.
+
+* 이 프로젝트는 **결정론적 규칙 기반 분석이 기본값**이며, 어떤 최적화 제안도 이 기본 경로가 외부 네트워크·API 키·모델 파일 없이 동작한다는 불변조건을 깨서는 안 됩니다 ([AI 보조 분석](#ai-보조-분석-선택-기능) 참고).
+* `src/magi/mapper/kconfig_map.py`의 옵션-근거 매핑을 수정할 때는 실제 Linux Kconfig에 그 옵션이 존재하고 주장한 효과가 맞는지 확인 후 코드 근처에 근거를 남겨주세요 — 이 파일은 "그럴듯해 보이는" 이름이 아니라 검증된 사실이어야 합니다.
+* 새 기능을 추가하면 대응하는 테스트를 `tests/`에 추가하고 `pytest -q`가 통과하는지 확인해주세요. 이 프로젝트는 fixture 테스트만으로는 못 잡는 버그가 실제 커널 빌드에서 여러 번 나온 이력이 있습니다 ([실제 리눅스 커널 소스로 검증한 기록](#실제-리눅스-커널-소스로-검증한-기록) 참고) — "테스트가 통과한다"와 "실제로 동작한다"는 다를 수 있음을 유념해주세요.
+* 커밋 메시지에 AI 도구가 생성했음을 명시해주세요.
+
+
+Communication and Support
+==========================
+
+* Issues: 이 저장소의 GitHub Issues
+* 만든 사람에게 직접 문의: 아래 [만든 사람](#만든-사람) 참고
+
+
+---
+
+
+왜 만들었는가
+-------------
 
 일반적인 리눅스 배포판의 커널은 서버, 임베디드, 데스크톱, 다양한 하드웨어 등 거의 모든 사용 사례를 지원하기 위해 방대한 드라이버, 파일시스템, 네트워크 프로토콜, 서브시스템을 함께 포함합니다. 하지만 실제 배포 환경(예: 컨테이너, 임베디드 디바이스, 단일 목적 서버)에서는 이 중 극히 일부 기능만 사용됩니다.
 
@@ -13,13 +114,15 @@
 
 이 프로젝트는 사용자가 배포하려는 프로그램(소스 코드)을 분석해 실제로 어떤 시스템 기능(네트워크, 파일 I/O 등)을 사용하는지 자동으로 판단하고, 그에 맞는 최소 구성으로 커널을 빌드합니다.
 
-## 기존 접근과의 차이
+기존 접근과의 차이
+-------------------
 
 리눅스는 이미 `make localmodconfig`, `make tinyconfig` 같은 최소 설정 도구를 제공합니다. 다만 이들은 공통적으로 "이미 실행 중인 시스템이 실제로 로드한 모듈"을 관찰하는 방식이라, 프로그램을 실행해보기 전에는 적용할 수 없습니다. 학계에서는 정적/동적 분석을 결합해 커널 공격 표면을 줄이는 연구(예: 소스·바이너리 분석으로 syscall 의존성을 추적하는 접근)가 제안된 바 있지만, 개발자가 바로 사용할 수 있는 오픈소스 도구로 공개된 사례는 찾기 어렵습니다.
 
 이 프로젝트는 배포 전 단계(빌드/CI 시점)에서, 실행해보지 않고 소스 코드만으로 필요한 커널 구성을 미리 판단하는 것을 목표로 합니다.
 
-## 핵심 아이디어
+핵심 아이디어
+--------------
 
 ```
 사용자 소스 코드
@@ -45,7 +148,8 @@
 부팅 가능한 최소 구성 커널 이미지
 ```
 
-## AI 보조 분석 (선택 기능)
+AI 보조 분석 (선택 기능)
+--------------------------
 
 규칙 기반 정적 분석은 사전에 정의한 API 패턴만 탐지할 수 있고, 오탐(예: 프로젝트가 `open`이라는 이름의 자체 함수를 정의한 경우)도 발생합니다. 이를 보완하기 위해 단계적인 보조 분석 체인을 둡니다. `magi.ai_assist.Resolver`가 그 확장 지점이며, 실제 구현은 다음 두 단계입니다.
 
@@ -54,7 +158,8 @@
 
 즉 "AI 보조 서버"가 별도로 구동되는 구조가 아니라, 분석 파이프라인 내 in-process 필터 체인입니다. 소스 코드가 프로세스 밖으로 전송되는 경로 자체가 없으므로, 이 프로젝트가 지향하는 보안 원칙(공격 표면 최소화)과도 일관성을 가집니다.
 
-## 개발 단계 (Roadmap)
+개발 단계 (Roadmap)
+---------------------
 
 정직한 스코프 관리를 위해 3단계로 나누어 진행합니다. 각 단계는 리스크와 구현 난이도가 크게 다르며, 낮은 단계부터 안정적으로 완성하는 것을 우선합니다.
 
@@ -65,10 +170,10 @@
 - [x] 소스 코드 정적 분석기: 네트워크/파일 I/O/스레딩 등 API 사용 패턴 탐지
 - [x] 탐지 결과 → Kconfig 옵션 매핑 테이블
 - [x] `.config` 자동 생성 및 기존 리눅스 빌드 도구(`merge_config.sh` 등)와 연동
-- [x] 실제 부팅 가능한 커스텀 커널 이미지 생성 파이프라인 (`--build --boot-test`; 오케스트레이션은 검증됨, 실제 Linux 커널 트리 대상 end-to-end 실행은 미검증 — 아래 "개발 상태" 참고)
+- [x] 실제 부팅 가능한 커스텀 커널 이미지 생성 파이프라인 (`--build --boot-test`) — 실제 Linux 6.6.79로 끝까지 검증 완료, 아래 참고
 - [ ] 기본 defconfig 대비 이미지 크기 / 빌드 시간 / 활성화된 Kconfig 옵션 수 비교
 
-세부 완료 현황과 알려진 한계는 아래 "개발 상태" / "알려진 한계" 절을 참고하세요.
+세부 완료 현황과 알려진 한계는 아래 [개발 상태](#개발-상태) / [알려진 한계](#알려진-한계) 절을 참고하세요.
 
 ### Phase 2 — 런타임 파라미터 자동 튜닝
 
@@ -87,7 +192,8 @@
 
 Phase 3는 현재 시점에서 완성을 약속하는 항목이 아니라 방향성입니다. 커널 스케줄러 핵심 로직 자체를 새로 설계하는 것은 검증에 오랜 시간이 필요한 작업이라, 이번 프로젝트에서는 리눅스가 이미 제공하는 확장 지점(sched_ext 등)을 활용하는 수준까지를 목표로 합니다.
 
-## 설치
+설치
+-----
 
 ```bash
 pip install -e .          # 개발 모드 설치 (src/ 레이아웃)
@@ -96,7 +202,10 @@ pip install -e ".[dev]"   # + pytest
 
 의존성은 순수 표준 라이브러리뿐입니다 (`--no-ai`를 쓰지 않아도 규칙 기반 경로는 항상 외부 패키지 없이 동작). 선택적으로 로컬 LLM 보조를 쓰려면 `pip install -e ".[llm]"`로 `llama-cpp-python`을 추가 설치하고 `--model-path`에 GGUF 모델 경로를 지정하세요.
 
-## 사용법
+실제 커널을 빌드하려면(`--build`) 별도로 리눅스 커널 빌드 요구사항(`make`, `gcc`/크로스 툴체인, `bc`, `bison`, `flex`, `libssl-dev`, `libelf-dev`)이 필요합니다 — 가장 안정적인 방법은 리눅스 환경(또는 Docker 컨테이너) 안에서 빌드하는 것입니다. macOS 호스트에서 직접 빌드하는 것은 리눅스 커널 빌드 시스템의 호스트 도구가 macOS와 근본적으로 맞지 않는 지점이 있어 권장하지 않습니다 — 자세한 내용은 [실제 리눅스 커널 소스로 검증한 기록](#실제-리눅스-커널-소스로-검증한-기록)을 참고하세요.
+
+사용법
+-------
 
 ```bash
 # 소스 코드가 실제로 쓰는 커널 기능 확인
@@ -108,8 +217,14 @@ magi analyze ./my_project --json
 # Kconfig 조각(fragment) 생성만
 magi build ./my_project --out magi.config
 
+# 왜 이 옵션들이 켜졌는지 설명까지 보기
+magi build ./my_project --out magi.config --explain
+
 # 실제 커널 소스 트리에 대해 .config까지 생성
 magi build ./my_project --kernel-src /path/to/linux --arch x86_64
+
+# 크로스 컴파일 (예: macOS에서 리눅스 커널을 대상으로)
+magi build ./my_project --kernel-src /path/to/linux --arch x86_64 --cross-compile x86_64-linux-musl-
 
 # .config 생성 + 실제 빌드 + QEMU 부팅 스모크테스트까지
 magi build ./my_project --kernel-src /path/to/linux --build --boot-test
@@ -117,7 +232,8 @@ magi build ./my_project --kernel-src /path/to/linux --build --boot-test
 
 `magi build`는 항상 `allnoconfig`(가장 작은 베이스라인) → MAGI가 생성한 fragment를 `scripts/kconfig/merge_config.sh -m`으로 병합 → `olddefconfig`(의존성 해석) 순서로 실제 커널 빌드 도구를 그대로 호출합니다. Kconfig 의존성 해석 자체를 재구현하지 않고 커널이 이미 제공하는 정본 구현에 위임하는 것이 의도적인 설계입니다.
 
-## 개발 상태
+개발 상태
+----------
 
 Phase 1 핵심 파이프라인(정적 분석기 → Kconfig 매퍼 → fragment/.config 생성기 → 빌드/부팅 오케스트레이션)이 동작하며, 47개의 자동화 테스트로 검증되어 있습니다(`pytest -q`). 아래 "실제 리눅스 커널 소스로 검증한 기록"에 정리했듯, 실제 Linux 6.6.79 소스로 컴파일부터 QEMU 부팅까지 MAGI 자신의 CLI로 완주했습니다.
 
@@ -143,7 +259,7 @@ fixture 기반 통합 테스트에 더해, 실제 [Linux 6.6.79](https://cdn.ker
 
 **이후 Docker Desktop을 강제 종료 후 재시작하니 정상 동작했고, 진짜 Linux 컨테이너(Ubuntu 22.04)에서 `magi build --kernel-src ... --arch arm64 --build --boot-test`를 MAGI CLI로 직접 실행해 끝까지 완주했습니다.**
 
-- 실제 [Linux 6.6.79](https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.79.tar.xz) 소스에 대해 `make ARCH=arm64 Image`가 컨테이너 안에서 완주 — `arch/arm64/boot/Image` (6,807,560 bytes)가 실제로 생성됨 (`file`로 확인: `Linux kernel ARM64 boot executable Image, little-endian, 4K pages`)
+- 실제 Linux 6.6.79 소스에 대해 `make ARCH=arm64 Image`가 컨테이너 안에서 완주 — `arch/arm64/boot/Image` (6,807,560 bytes)가 실제로 생성됨 (`file`로 확인: `Linux kernel ARM64 boot executable Image, little-endian, 4K pages`)
 - `qemu-system-aarch64 -M virt`로 부팅 → 진짜 `Linux version 6.6.79 (...)` 배너부터 네트워크 스택 초기화(`NET: Registered PF_INET protocol family`, TCP/UDP 해시 테이블 구성 — 소스가 실제로 쓰는 `network_inet`과 정확히 대응)까지 전부 출력됨. 루트 파일시스템을 주지 않았으므로 마지막엔 의도한 대로 `VFS: Unable to mount root fs on unknown-block(0,0)` 커널 패닉으로 끝남 (이는 실패가 아니라 예상된 정상 동작 — MAGI의 `boot_test()`는 정확히 이 지점, 즉 커널이 실행을 시작했다는 증거(부팅 배너)만 확인하도록 설계되어 있음).
 - `magi build ... --boot-test`의 최종 출력: `boot test: PASS (kernel banner observed under QEMU)`, `CLI_EXIT_CODE=0`
 
@@ -154,16 +270,19 @@ fixture 기반 통합 테스트에 더해, 실제 [Linux 6.6.79](https://cdn.ker
 
 정리하면: **정식 출시라 부를 만한 검증을 실제로 완료했습니다.** Kconfig 생성·병합·해석부터, 진짜 Linux 6.6.79 소스의 실제 컴파일(`vmlinux`/`Image` 바이너리 산출), 진짜 QEMU 부팅(커널 배너 확인)까지 MAGI 자신의 CLI(`magi build --build --boot-test`)로 전부 통과했습니다. 이 과정에서 발견한 버그 4개는 전부 고쳤고 회귀 테스트로 고정했습니다 (47개 테스트 전부 통과).
 
-## 알려진 한계
+알려진 한계
+------------
 
 - **정적 분석의 근본적 한계**: 동적 디스패치, 리플렉션, `dlopen`/`ctypes`로 로드되는 코드, 매크로로 생성된 호출 등은 탐지되지 않습니다. 놓친 기능이 있으면 커널이 부팅 후 실패할 수 있습니다 — MAGI는 "이 실행 경로가 확실히 쓰는 기능"의 하한선을 제공하는 도구이지, 완전성을 보장하지 않습니다.
 - C 분석기는 전체 파서가 아니라 렉시컬 스캐너입니다. 문자열/주석은 제거하지만 스코프는 이해하지 못하므로(예: 지역 변수 `int socket = 5;`는 오탐이 될 수 있음), AI 보조 단계가 가장 흔한 오탐(동일 이름의 지역 함수 정의) 하나를 필터링합니다.
 - Kconfig 매핑 테이블은 수동으로 큐레이션되었으며 커널 버전에 따라 옵션 이름이 달라질 수 있습니다 (예: 매우 오래된/최신 트리).
 
-## 라이선스
+라이선스
+---------
 
 GPL-2.0-or-later ([LICENSE](LICENSE) 참고). 리눅스 커널 자체도 GPL-2.0이며, 본 프로젝트가 생성하는 산출물(Kconfig fragment, `.config`)은 커널 설정 데이터일 뿐 커널 소스를 포함하지 않으므로 별도 라이선스 고지가 필요하지 않습니다.
 
-## 만든 사람
+만든 사람
+----------
 
 주인놈 — [ChodOS](https://github.com/chodaQ/chodOS) 개발 및 리눅스 커널 staging tree 기여 경험을 바탕으로 시작한 프로젝트입니다.
