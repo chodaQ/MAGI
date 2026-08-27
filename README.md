@@ -271,4 +271,4 @@ GPL-2.0-or-later ([LICENSE](LICENSE) 참고). 리눅스 커널 자체도 GPL-2.0
 만든 사람
 ----------
 
-chodaQ— [ChodOS](https://github.com/chodaQ/chodOS) 개발 및 리눅스 커널 staging tree 기여 경험을 바탕으로 시작한 프로젝트입니다.
+chodaQ
